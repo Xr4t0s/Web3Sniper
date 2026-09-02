@@ -1,3 +1,5 @@
+pub mod contracts;
+
 /// Données communes à toute détection on-chain.
 #[derive(Clone, Debug)]
 pub struct Detection {

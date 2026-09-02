@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use tokio::sync::broadcast::Sender;
+use alloy::primitives::Address;
 use alloy::providers::Provider as AlloyProvider;
+use alloy::rpc::types::Filter;
+use futures_util::{stream::FuturesUnordered, StreamExt};
+use tokio::sync::broadcast::Sender;
 
-use crate::config::watchlist::Chain;
+use crate::config::watchlist::{Chain, Target, TargetKind};
+use crate::event::contracts;
 use crate::event::{Event, ListenerEvent};
 use crate::provider::Provider;
 
@@ -20,112 +24,58 @@ impl SubListener {
         SubListener { name, chain, provider, tx }
     }
 
-    /// Point d'entrée de la task.
+    /// Point d'entrée de la task : un watcher par `target`, tous en concurrence.
+    /// `run` ne rend la main que quand tous les watchers sont terminés.
     pub async fn run(self) {
         let _ = self.tx.send(Event::Listener(ListenerEvent::ChainUp {
             chain: self.name.clone(),
         }));
 
-        // Les deux watchers tournent en concurrence sur la même task :
-        // `run` ne rend la main que quand les deux sont terminés.
-        let launch = async {
-            if self.chain.config.listen_launch {
-                self.watch_launch().await;
-            }
-        };
-        let graduation = async {
-            if self.chain.config.listen_graduation {
-                self.watch_graduation().await;
-            }
-        };
-
-        tokio::join!(launch, graduation);
+        let watchers: FuturesUnordered<_> =
+            self.chain.targets.iter().map(|t| self.watch(t)).collect();
+        watchers.collect::<()>().await;
     }
 
-    /// STUB — à implémenter : connexion `self.chain.wss_rpc_url`, filtre logs sur
-    /// `self.chain.launch`, construire un `Detection` puis
-    /// `self.tx.send(Event::Listener(ListenerEvent::Launch(detection)))`.
-    async fn watch_launch(&self) {
-        use alloy::{
-            primitives::Address,
-            providers::Provider as AlloyProvider,
-            rpc::types::Filter,
-        };
-        use futures_util::StreamExt;
-
-        let _ = self.tx.send(Event::Listener(
-            ListenerEvent::ListeningLaunches {
-                chain: self.name.clone(),
-            },
-        ));
-
-        let Some(target) = &self.chain.launch else {
-            return;
-        };
+    /// STUB — souscrit aux logs de `target.address` filtrés sur `target.event`,
+    /// et pour l'instant se contente de les logger. À terme : construire un
+    /// `Detection` et l'émettre via `ListenerEvent::Launch` / `Graduation`.
+    async fn watch(&self, target: &Target) {
+        let label = format!("{} / {} ({:?})", self.name, target.name, target.kind);
 
         let address: Address = target
-            .deployer
+            .address
             .parse()
-            .expect("adresse launch invalide");
+            .unwrap_or_else(|_| panic!("{label}: adresse invalide: {}", target.address));
 
-        let filter = Filter::new()
-            .address(address);
+        let _ = self.tx.send(Event::Listener(match target.kind {
+            TargetKind::Launch => ListenerEvent::ListeningLaunches { chain: self.name.clone() },
+            TargetKind::Graduation => ListenerEvent::ListeningGraduations { chain: self.name.clone() },
+        }));
 
-        let subscription = self.provider
+        let filter = Filter::new().address(address).event(target.event_signature());
+
+        let subscription = self
+            .provider
             .ws
             .subscribe_logs(&filter)
             .await
-            .expect("impossible de subscribe aux launches");
+            .unwrap_or_else(|e| panic!("{label}: subscribe échoué: {e}"));
+
+        println!("[{label}] écoute {address}");
 
         let mut stream = subscription.into_stream();
 
         while let Some(log) = stream.next().await {
-            println!("[{}] Launch détecté: {:?}", self.name, log);
-        }
-    }
-
-    /// STUB — idem via `self.chain.graduation` →
-    /// `Event::Listener(ListenerEvent::Graduation(detection))`.
-    async fn watch_graduation(&self) {
-        use alloy::{
-            primitives::Address,
-            rpc::types::Filter,
-        };
-        use futures_util::StreamExt;
-
-        let _ = self.tx.send(Event::Listener(
-            ListenerEvent::ListeningGraduations {
-                chain: self.name.clone(),
-            },
-        ));
-
-        let Some(target) = &self.chain.graduation else {
-            return;
-        };
-
-        let address: Address = target
-            .deployer
-            .parse()
-            .expect("adresse graduation invalide");
-
-        let filter = Filter::new()
-            .address(address)
-            .event("PoolGraduated(address,uint256,uint256,uint256)");
-
-        let subscription = self.provider
-            .ws
-            .subscribe_logs(&filter)
-            .await
-            .expect("impossible de subscribe aux graduations");
-
-        let mut stream = subscription.into_stream();
-
-        while let Some(log) = stream.next().await {
-            println!(
-                "[{}] Graduation détectée: {:?}",
-                self.name,
-                log
-            );
+            match contracts::decode(&log) {
+                Some(decoded) => {
+                    let token = decoded.token();
+                    let meta = contracts::token_metadata(&self.provider.http, token).await;
+                    println!("[{label}] {} {token} — {decoded:?}", meta.label());
+                }
+                None => {
+                    println!("[{label}] log non décodé (topic0/ABI inattendu): {log:?}");
+                }
+            }
         }
     }
 }
