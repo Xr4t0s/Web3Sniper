@@ -46,8 +46,7 @@ impl Providers {
     /// one bad endpoint never blocks the others.
     pub async fn connect(watchlist: &Watchlist) -> (Self, Vec<(String, anyhow::Error)>) {
         let connects = watchlist.chains.iter().map(|(name, chain)| async move {
-            let result =
-                Provider::connect(name, &chain.https_rpc_url, &chain.wss_rpc_url).await;
+            let result = Provider::connect(name, &chain.https_rpc_url, &chain.wss_rpc_url).await;
             (name.clone(), result)
         });
 

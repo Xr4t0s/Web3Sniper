@@ -1,33 +1,26 @@
 # web3sniper
 
 Watches EVM chains over WebSocket for token **launches** and **graduations**,
-decodes the matching logs, enriches them with token metadata, and publishes typed
-events on an internal bus. A logger renders them to the terminal; other consumers
-(dashboard feed, spreadsheet, chat alerts, trade execution) plug into the same
-stream.
+decodes and enriches the matching logs (token facts, curve/pool state, dev buy),
+and publishes typed events on an internal bus. Stages consume that stream: the
+logger renders it now; a tracker, opportunity scorer, trader, dashboard feed and
+chat alerts plug into the same bus later.
+
+`SPECS.md` is the design contract (envelope, data model, pipeline). `CLAUDE.md`
+is the working guide.
 
 ```
-                         ┌──────────────┐
- watchlist.yaml ───────▶ │   listener   │  one task per chain,
-                         │  sublistener │  one WS subscription per target
-                         └──────┬───────┘
-                                │  Event
-                       ┌────────▼─────────┐   broadcast::channel<Event>
-                       │       bus        │
-                       └───┬────────┬─────┘
-                           │        │
-                     ┌─────▼──┐  ┌──▼─────────────┐
-                     │ logger │  │ future consumers│  ws feed · xlsx · discord
-                     └────────┘  └────────────────┘
+watchlist.yaml → listener ─(enrich)─▶ bus ─▶ logger  (+ tracker · opportunist · trader · dashboard)
 ```
 
 ## Run
 
 ```sh
-cargo run
+cargo run                  # human-readable coloured logs
+DEBUG=true cargo run | jq   # one JSON envelope per line
 ```
 
-Set `NO_COLOR=1` or pipe the output to disable ANSI colour.
+`NO_COLOR=1` or a non-TTY stdout disables colour and the banner.
 
 ## Configure — `watchlist.yaml`
 
@@ -35,10 +28,10 @@ Set `NO_COLOR=1` or pipe the output to disable ANSI colour.
 chains:
   <chain-id>:
     wss_rpc_url:   "wss://…"      # subscriptions
-    https_rpc_url: "https://…"    # metadata / eth_call
+    https_rpc_url: "https://…"    # enrichment view calls
     targets:
       - kind: launch              # launch | graduation
-        name: "PonsFamily V2"     # shown in logs
+        name: "PonsFamily V2"     # shown in logs / as `protocol`
         address: "0x…"            # contract that emits the event
         event: "Launched(address,address,address,address,uint256,uint256)"
 ```
@@ -48,30 +41,29 @@ Several targets may share a `kind` (coexisting factory / pool versions). The
 
 ### Adding an event type
 
-Event decoding is typed via `alloy::sol!` in [`src/contracts/mod.rs`](src/contracts/mod.rs).
-To watch a new event:
+`alloy::sol!` ABIs live in [`src/chain/contracts.rs`](src/chain/contracts.rs):
 
-1. Add its `sol!` definition with the correct `indexed` markers (they must match
-   the deployed ABI — indexed fields live in topics, the rest in `data`).
-2. Add a `DecodedEvent` variant and wire it into `decode()`.
-3. Reference it from `watchlist.yaml`.
+1. Add the `sol!` event with correct `indexed` markers (must match the deployed
+   ABI — indexed fields are topics, the rest is `data`).
+2. Add a `DecodedEvent` variant + an arm in `decode()`.
+3. Handle it in [`src/chain/enrich.rs`](src/chain/enrich.rs) to fill the
+   `Detection`.
+4. Reference the signature in `watchlist.yaml`.
 
-A signature or `indexed` mismatch surfaces as an `Undecoded` event in the logs,
-never a panic.
+A signature / `indexed` mismatch surfaces as an `Undecoded` event, never a panic.
 
 ## Layout
 
-| module        | responsibility                                             |
-|---------------|-----------------------------------------------------------|
-| `config`      | parse `watchlist.yaml`                                     |
-| `provider`    | one HTTP + WS `Provider` per chain                         |
-| `contracts`   | `sol!` event ABIs, log decoding, ERC-20 metadata          |
-| `event`       | the bus and the `Event` type (all `Serialize`)            |
-| `listener`    | fan out to one task per chain, one subscription per target |
-| `consumer`    | bus sinks; `logger` is the only one so far                |
+| module     | responsibility                                                   |
+|------------|-----------------------------------------------------------------|
+| `config`   | parse `watchlist.yaml`                                           |
+| `chain`    | RPC providers, `sol!` ABIs + log decode, log → `Detection` enrich |
+| `bus`      | the `Bus`, `Envelope`, `Dec` numeric wrapper                     |
+| `events`   | typed payloads (`Event`, `Detection`), topic / level / trace_id  |
+| `stages`   | bus stages: `listener` (producer), `logger` (sink)               |
 
 ## Status
 
-Detection and logging work. Not implemented yet: trade execution, and the
-non-terminal consumers (dashboard socket, spreadsheet, Discord/Telegram).
-The two `launch` event ABIs are inferred and marked `TODO` in `contracts`.
+Detection, enrichment and logging work against live chains. Not built yet:
+tracker, opportunity scorer, trader, and the non-terminal sinks. PonsV1
+(`TokenLaunched`) enrichment still needs the `dexId` → venue/router lookup.

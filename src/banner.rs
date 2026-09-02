@@ -1,8 +1,14 @@
-//! Startup banner.
+//! Startup banner. Skipped when stdout is not a terminal, so piped or
+//! `DEBUG=true` JSONL output stays machine-clean.
 
-use crate::consumer::style::{bold_cyan, dim};
+use std::io::IsTerminal;
+
+use crate::stages::style::{bold_cyan, dim};
 
 pub fn print() {
+    if !std::io::stdout().is_terminal() {
+        return;
+    }
     let art = [
         r"                _     _____             _                ",
         r"__      _____  | |__ |___ / ___ _ __ (_)_ __  ___ _ __  ",
