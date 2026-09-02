@@ -46,12 +46,7 @@ impl SubListener {
             .address
             .parse()
             .unwrap_or_else(|_| panic!("{label}: adresse invalide: {}", target.address));
-
-        let _ = self.tx.send(Event::Listener(match target.kind {
-            TargetKind::Launch => ListenerEvent::ListeningLaunches { chain: self.name.clone() },
-            TargetKind::Graduation => ListenerEvent::ListeningGraduations { chain: self.name.clone() },
-        }));
-
+        
         let filter = Filter::new().address(address).event(target.event_signature());
 
         let subscription = self
