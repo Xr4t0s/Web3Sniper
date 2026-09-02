@@ -1,13 +1,15 @@
+mod config;
 mod event;
 mod listener;
 mod logger;
 mod provider;
+mod executor;
 
 use std::sync::Arc;
 
 use tokio::sync::broadcast;
 
-use listener::watchlist::Watchlist;
+use config::watchlist::Watchlist;
 use provider::Providers;
 
 #[tokio::main]
@@ -20,6 +22,7 @@ async fn main() {
     let logger_handle = tokio::spawn(async move {
         logger::Logger::start(logger::Level::Info, rx).await;
     });
+    let executor = executor::Executor { methodId: "0x12345678".to_string() };
     let listener_handle = tokio::spawn(async move {
         listener::Listener::new(watchlist, providers, tx).start().await;
     });

@@ -1,23 +1,23 @@
 pub mod sublistener;
-pub mod watchlist;
 
 use std::sync::Arc;
 
 use tokio::sync::broadcast::Sender;
 use tokio::task::JoinHandle;
 
+use crate::config::watchlist::Watchlist;
 use crate::event::{Event, ListenerEvent};
 use crate::provider::Providers;
 use sublistener::SubListener;
 
 pub struct Listener {
-    pub watchlist: watchlist::Watchlist,
+    pub watchlist: Watchlist,
     pub providers: Arc<Providers>,
     pub tx: Sender<Event>,
 }
 
 impl Listener {
-    pub fn new(watchlist: watchlist::Watchlist, providers: Arc<Providers>, tx: Sender<Event>) -> Self {
+    pub fn new(watchlist: Watchlist, providers: Arc<Providers>, tx: Sender<Event>) -> Self {
         Listener { watchlist, providers, tx }
     }
 

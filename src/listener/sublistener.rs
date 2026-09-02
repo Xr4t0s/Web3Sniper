@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::broadcast::Sender;
 
-use super::watchlist::Chain;
+use crate::config::watchlist::Chain;
 use crate::event::{Event, ListenerEvent};
 use crate::provider::Provider;
 
@@ -46,6 +46,7 @@ impl SubListener {
     /// `self.tx.send(Event::Listener(ListenerEvent::Launch(detection)))`.
     async fn watch_launch(&self) {
         let _ = self.tx.send(Event::Listener(ListenerEvent::ListeningLaunches { chain: self.name.clone() }));
+        // self.provider.subscribe_logs().await;
         std::future::pending::<()>().await;
     }
 
@@ -53,6 +54,7 @@ impl SubListener {
     /// `Event::Listener(ListenerEvent::Graduation(detection))`.
     async fn watch_graduation(&self) {
         let _ = self.tx.send(Event::Listener(ListenerEvent::ListeningGraduations { chain: self.name.clone() }));
+        // self.provider.subscribe_logs().await;
         std::future::pending::<()>().await;
     }
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::listener::watchlist::Watchlist;
+use crate::config::watchlist::Watchlist;
 
 /// Accès RPC à une chain. Partagé (`Arc`) entre Listener, Executor, etc.
 #[derive(Debug)]
