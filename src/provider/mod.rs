@@ -1,57 +1,74 @@
+//! RPC access, one [`Provider`] per chain.
+
 use std::collections::HashMap;
-use std::error::Error;
 use std::sync::Arc;
 
-use alloy::providers::{DynProvider, Provider as AlloyProvider, ProviderBuilder};
+use alloy::providers::{DynProvider, Provider as _, ProviderBuilder};
+use anyhow::Context;
+use futures_util::future::join_all;
 
 use crate::config::watchlist::Watchlist;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
-
-/// Accès RPC à une chain. Partagé (`Arc`) entre Listener, Executor, etc.
-///
-/// `http` sert aux appels JSON-RPC (eth_call, eth_sendRawTransaction, ...),
-/// `ws` aux souscriptions (`ws.subscribe_logs(&filter)`).
+/// Connections to one chain, shared (`Arc`) across the listener and future
+/// consumers. `http` serves JSON-RPC calls (`eth_call`, `eth_sendRawTransaction`);
+/// `ws` serves subscriptions (`subscribe_logs`).
 #[derive(Debug)]
 pub struct Provider {
-    pub chain: String,
     pub http: DynProvider,
     pub ws: DynProvider,
 }
 
 impl Provider {
-    pub async fn new(chain: String, http_url: String, ws_url: String) -> Result<Self> {
-        let http = ProviderBuilder::new().connect(&http_url).await?.erased();
-        let ws = ProviderBuilder::new().connect(&ws_url).await?.erased();
-        Ok(Self { chain, http, ws })
+    async fn connect(chain: &str, http_url: &str, ws_url: &str) -> anyhow::Result<Self> {
+        let http = ProviderBuilder::new()
+            .connect(http_url)
+            .await
+            .with_context(|| format!("{chain}: HTTP connect"))?
+            .erased();
+        let ws = ProviderBuilder::new()
+            .connect(ws_url)
+            .await
+            .with_context(|| format!("{chain}: WS connect"))?
+            .erased();
+        Ok(Self { http, ws })
     }
 }
 
-/// Un `Provider` par chain. Construite une fois dans `main`, partagée en `Arc`.
+/// One [`Provider`] per chain, built once at startup.
 #[derive(Debug, Default)]
 pub struct Providers {
     chains: HashMap<String, Arc<Provider>>,
 }
 
 impl Providers {
-    pub async fn from_watchlist(watchlist: &Watchlist) -> Result<Self> {
+    /// Connects every chain concurrently and independently. Returns the
+    /// providers that came up, plus `(chain, error)` for those that did not —
+    /// one bad endpoint never blocks the others.
+    pub async fn connect(watchlist: &Watchlist) -> (Self, Vec<(String, anyhow::Error)>) {
+        let connects = watchlist.chains.iter().map(|(name, chain)| async move {
+            let result =
+                Provider::connect(name, &chain.https_rpc_url, &chain.wss_rpc_url).await;
+            (name.clone(), result)
+        });
+
         let mut chains = HashMap::new();
-
-        for (name, chain) in &watchlist.chains {
-            let provider = Provider::new(
-                name.clone(),
-                chain.https_rpc_url.clone(),
-                chain.wss_rpc_url.clone(),
-            )
-            .await?;
-
-            chains.insert(name.clone(), Arc::new(provider));
+        let mut failures = Vec::new();
+        for (name, result) in join_all(connects).await {
+            match result {
+                Ok(provider) => {
+                    chains.insert(name, Arc::new(provider));
+                }
+                Err(e) => failures.push((name, e)),
+            }
         }
-
-        Ok(Self { chains })
+        (Self { chains }, failures)
     }
 
-    /// Le provider d'une chain donnée (clone du `Arc`, pas de la connexion).
+    pub fn is_empty(&self) -> bool {
+        self.chains.is_empty()
+    }
+
+    /// The provider for a chain (clones the `Arc`, not the connection).
     pub fn get(&self, chain: &str) -> Option<Arc<Provider>> {
         self.chains.get(chain).cloned()
     }

@@ -1,30 +1,43 @@
-use serde::Deserialize;
-use std::collections::HashMap;
+//! `watchlist.yaml` — the chains to watch and the contracts on each.
 
-/// Ce qu'un contrat surveillé produit — détermine la logique appliquée en aval.
-#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+use std::collections::HashMap;
+use std::path::Path;
+
+use anyhow::Context;
+use serde::Deserialize;
+
+/// What a watched contract produces, and which downstream logic applies.
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetKind {
     Launch,
     Graduation,
 }
 
-/// Un contrat à surveiller sur une chain : son adresse et l'event à filtrer.
-/// Plusieurs `Target` de même `kind` sont permis (versions de factory/pool
-/// coexistantes).
+impl TargetKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TargetKind::Launch => "launch",
+            TargetKind::Graduation => "graduation",
+        }
+    }
+}
+
+/// One contract to watch on a chain. Several targets may share a `kind`
+/// (coexisting factory / pool versions).
 #[derive(Debug, Deserialize)]
 pub struct Target {
     pub kind: TargetKind,
-    /// Nom lisible du protocole/contrat, pour les logs.
+    /// Human label for logs, e.g. `"PonsFamily V2"`.
     pub name: String,
     pub address: String,
-    /// Signature humaine de l'event, ex. `PoolGraduated(address,uint256,uint256,uint256)`.
+    /// Event signature to filter on, e.g. `PoolGraduated(address,uint256,uint256,uint256)`.
     pub event: String,
 }
 
 impl Target {
-    /// Signature canonique acceptée par `Filter::event` : sans le mot-clé
-    /// `event` ni les espaces parasites qu'on copie souvent depuis le code Solidity.
+    /// Canonical signature for `Filter::event`: no `event` keyword, no stray
+    /// whitespace (both common when pasting from Solidity).
     pub fn event_signature(&self) -> &str {
         self.event
             .trim()
@@ -48,10 +61,14 @@ pub struct Watchlist {
 }
 
 impl Watchlist {
-    pub fn load_config(file_path: &str) -> Result<Watchlist, Box<dyn std::error::Error>> {
-        let file = std::fs::File::open(file_path)?;
-        let watchlist: Watchlist = serde_yaml::from_reader(file)?;
+    pub fn load(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let path = path.as_ref();
+        let file =
+            std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+        serde_yaml::from_reader(file).with_context(|| format!("parsing {}", path.display()))
+    }
 
-        Ok(watchlist)
+    pub fn chain_names(&self) -> Vec<String> {
+        self.chains.keys().cloned().collect()
     }
 }

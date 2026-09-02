@@ -1,3 +1,12 @@
+# Chains to watch, and the contracts to watch on each.
+#
+#   kind:     launch | graduation
+#   name:     label shown in logs
+#   address:  contract that emits the event
+#   event:    Solidity event signature (the `event ` keyword is optional)
+#
+# Several targets may share a kind (coexisting factory / pool versions).
+
 chains:
   rh:
     wss_rpc_url: "wss://robinhood-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
@@ -11,19 +20,20 @@ chains:
       - kind: launch
         name: "PonsFamily"
         address: "0xa5aab3f0c6eeadf30ef1d3eb997108e976351feb"
-        event: "event TokenLaunched(address,address,address,address,address,uint256,uint256,uint256,uint256,uint256)"
-      # PonsV2LaunchFactory (= executor.factory()), émetteur réel de PoolGraduated.
+        event: "TokenLaunched(address,address,address,address,address,uint256,uint256,uint256,uint256,uint256)"
+
+      # PonsV2LaunchFactory (= executor.factory()), the real emitter of PoolGraduated.
       # topic0 = 0x0a44ef75df69c534f43cd6c1aa3ef8983065fe5fe79ef9e79f6494e6f258c259
-      # topics[1] = token (seul champ indexé)
       - kind: graduation
         name: "PonsFamily V2"
         address: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e"
         event: "PoolGraduated(address,uint256,uint256,uint256)"
 
-  # base:
-  #   wss_rpc_url: "wss://base-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
-  #   https_rpc_url: "https://base-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
-  #   targets:
-  #     - kind: graduation
-  #       address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
-  #       event: "PoolGraduated(address,uint256,uint256,uint256)"
+  base:
+    wss_rpc_url: "wss://base-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
+    https_rpc_url: "https://base-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
+    targets:
+      - kind: graduation
+        name: "PonsFamily V2"
+        address: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+        event: "PoolGraduated(address,address,uint24,int24,address)"

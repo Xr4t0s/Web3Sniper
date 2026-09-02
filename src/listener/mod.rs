@@ -1,43 +1,46 @@
+//! Fans the watchlist out into one task per chain.
+
 pub mod sublistener;
 
 use std::sync::Arc;
 
-use tokio::sync::broadcast::Sender;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 
 use crate::config::watchlist::Watchlist;
-use crate::event::{Event, ListenerEvent};
+use crate::event::Event;
+use crate::event::bus::Sender;
 use crate::provider::Providers;
 use sublistener::SubListener;
 
 pub struct Listener {
-    pub watchlist: Watchlist,
-    pub providers: Arc<Providers>,
-    pub tx: Sender<Event>,
+    watchlist: Watchlist,
+    providers: Arc<Providers>,
+    bus: Sender,
 }
 
 impl Listener {
-    pub fn new(watchlist: Watchlist, providers: Arc<Providers>, tx: Sender<Event>) -> Self {
-        Listener { watchlist, providers, tx }
+    pub fn new(watchlist: Watchlist, providers: Providers, bus: Sender) -> Self {
+        Self {
+            watchlist,
+            providers: Arc::new(providers),
+            bus,
+        }
     }
 
-    /// Spawne une sub-listener par chain, émet `Ready`, puis attend les tasks.
-    pub async fn start(self) {
-        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+    /// Spawns a [`SubListener`] per chain and runs until all of them stop.
+    pub async fn run(self) {
+        let mut tasks = JoinSet::new();
 
-        for (name, chain) in self.watchlist.chains {
-            let provider = self
-                .providers
-                .get(&name)
-                .expect("provider manquant pour une chain de la watchlist");
-            let sublistener = SubListener::new(name, chain, provider, self.tx.clone());
-            handles.push(tokio::spawn(sublistener.run()));
+        for (chain, config) in self.watchlist.chains {
+            let Some(provider) = self.providers.get(&chain) else {
+                continue; // already reported as ChainDown at connect time
+            };
+            let _ = self.bus.send(Event::ChainConnected {
+                chain: chain.clone(),
+            });
+            tasks.spawn(SubListener::new(chain, config, provider, self.bus.clone()).run());
         }
 
-        let _ = self.tx.send(Event::Listener(ListenerEvent::Ready));
-
-        for handle in handles {
-            let _ = handle.await;
-        }
+        while tasks.join_next().await.is_some() {}
     }
 }

@@ -1,76 +1,100 @@
+//! One task per chain; inside it, one log subscription per configured target.
+
 use std::sync::Arc;
 
 use alloy::primitives::Address;
-use alloy::providers::Provider as AlloyProvider;
+use alloy::providers::Provider as _;
 use alloy::rpc::types::Filter;
-use futures_util::{stream::FuturesUnordered, StreamExt};
-use tokio::sync::broadcast::Sender;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 
-use crate::config::watchlist::{Chain, Target, TargetKind};
-use crate::event::contracts;
-use crate::event::{Event, ListenerEvent};
+use crate::config::watchlist::{Chain, Target};
+use crate::contracts;
+use crate::event::bus::Sender;
+use crate::event::{Detection, Event};
 use crate::provider::Provider;
 
-/// Écoute une seule chain. Une task tokio par instance (`self` owned → `'static`).
 pub struct SubListener {
-    pub name: String,
-    pub chain: Chain,
-    pub provider: Arc<Provider>,
-    pub tx: Sender<Event>,
+    chain: String,
+    config: Chain,
+    provider: Arc<Provider>,
+    bus: Sender,
 }
 
 impl SubListener {
-    pub fn new(name: String, chain: Chain, provider: Arc<Provider>, tx: Sender<Event>) -> Self {
-        SubListener { name, chain, provider, tx }
+    pub fn new(chain: String, config: Chain, provider: Arc<Provider>, bus: Sender) -> Self {
+        Self {
+            chain,
+            config,
+            provider,
+            bus,
+        }
     }
 
-    /// Point d'entrée de la task : un watcher par `target`, tous en concurrence.
-    /// `run` ne rend la main que quand tous les watchers sont terminés.
+    /// Watches every target concurrently; returns once all subscriptions end.
     pub async fn run(self) {
-        let _ = self.tx.send(Event::Listener(ListenerEvent::ChainUp {
-            chain: self.name.clone(),
-        }));
-
         let watchers: FuturesUnordered<_> =
-            self.chain.targets.iter().map(|t| self.watch(t)).collect();
+            self.config.targets.iter().map(|t| self.watch(t)).collect();
         watchers.collect::<()>().await;
     }
 
-    /// STUB — souscrit aux logs de `target.address` filtrés sur `target.event`,
-    /// et pour l'instant se contente de les logger. À terme : construire un
-    /// `Detection` et l'émettre via `ListenerEvent::Launch` / `Graduation`.
     async fn watch(&self, target: &Target) {
-        let label = format!("{} / {} ({:?})", self.name, target.name, target.kind);
+        let address: Address = match target.address.parse() {
+            Ok(addr) => addr,
+            Err(e) => return self.stopped(target, format!("invalid address: {e}")),
+        };
 
-        let address: Address = target
-            .address
-            .parse()
-            .unwrap_or_else(|_| panic!("{label}: adresse invalide: {}", target.address));
-        
-        let filter = Filter::new().address(address).event(target.event_signature());
+        let filter = Filter::new()
+            .address(address)
+            .event(target.event_signature());
+        let subscription = match self.provider.ws.subscribe_logs(&filter).await {
+            Ok(sub) => sub,
+            Err(e) => return self.stopped(target, format!("subscribe failed: {e}")),
+        };
 
-        let subscription = self
-            .provider
-            .ws
-            .subscribe_logs(&filter)
-            .await
-            .unwrap_or_else(|e| panic!("{label}: subscribe échoué: {e}"));
-
-        println!("[{label}] écoute {address}");
+        let _ = self.bus.send(Event::Watching {
+            chain: self.chain.clone(),
+            source: target.name.clone(),
+            kind: target.kind,
+            address: address.to_string(),
+            signature: target.event_signature().to_string(),
+        });
 
         let mut stream = subscription.into_stream();
-
         while let Some(log) = stream.next().await {
             match contracts::decode(&log) {
                 Some(decoded) => {
                     let token = decoded.token();
-                    let meta = contracts::token_metadata(&self.provider.http, token).await;
-                    println!("[{label}] {} {token} — {decoded:?}", meta.label());
+                    let metadata = contracts::token_metadata(&self.provider.http, token).await;
+                    let _ = self.bus.send(Event::Detection(Detection {
+                        chain: self.chain.clone(),
+                        kind: target.kind,
+                        source: target.name.clone(),
+                        event: decoded.name(),
+                        token: token.to_string(),
+                        block_number: log.block_number,
+                        tx_hash: log.transaction_hash.map(|h| h.to_string()),
+                        metadata: Some(metadata),
+                        payload: decoded.payload(),
+                    }));
                 }
                 None => {
-                    println!("[{label}] log non décodé (topic0/ABI inattendu): {log:?}");
+                    let _ = self.bus.send(Event::Undecoded {
+                        chain: self.chain.clone(),
+                        source: target.name.clone(),
+                        topic0: log.topic0().map(|t| t.to_string()),
+                    });
                 }
             }
         }
+
+        self.stopped(target, "subscription closed".into());
+    }
+
+    fn stopped(&self, target: &Target, reason: String) {
+        let _ = self.bus.send(Event::WatchStopped {
+            chain: self.chain.clone(),
+            source: target.name.clone(),
+            reason,
+        });
     }
 }

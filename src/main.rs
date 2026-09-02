@@ -1,31 +1,44 @@
+mod banner;
 mod config;
+mod consumer;
+mod contracts;
 mod event;
 mod listener;
-mod logger;
 mod provider;
-mod executor;
 
-use std::sync::Arc;
+use tokio::task::JoinSet;
 
-use tokio::sync::broadcast;
-
-use config::watchlist::Watchlist;
-use provider::Providers;
+use crate::config::watchlist::Watchlist;
+use crate::consumer::logger::Logger;
+use crate::event::{Event, bus};
+use crate::listener::Listener;
+use crate::provider::Providers;
 
 #[tokio::main]
-async fn main() {
-    let (tx, rx) = broadcast::channel::<event::Event>(1024);
+async fn main() -> anyhow::Result<()> {
+    banner::print();
 
-    let watchlist = Watchlist::load_config("watchlist.yaml").unwrap();
-    let providers = Arc::new(Providers::from_watchlist(&watchlist).await.unwrap());
+    let watchlist = Watchlist::load("watchlist.yaml")?;
 
-    let logger_handle = tokio::spawn(async move {
-        logger::Logger::start(logger::Level::Info, rx).await;
-    });
+    let bus = bus::channel();
+    let mut tasks = JoinSet::new();
+    tasks.spawn(consumer::drive(Logger, bus.subscribe()));
 
-    let listener_handle = tokio::spawn(async move {
-        listener::Listener::new(watchlist, providers, tx).start().await;
-    });
+    let _ = bus.send(Event::Started { chains: watchlist.chain_names() });
 
-    let _ = tokio::join!(logger_handle, listener_handle);
+    let (providers, failures) = Providers::connect(&watchlist).await;
+    for (chain, err) in failures {
+        let _ = bus.send(Event::ChainDown { chain, reason: format!("{err:#}") });
+    }
+    if providers.is_empty() {
+        anyhow::bail!("no chain connected");
+    }
+
+    tasks.spawn(Listener::new(watchlist, providers, bus.clone()).run());
+    drop(bus); // consumers exit once every producer has.
+
+    while let Some(res) = tasks.join_next().await {
+        res?;
+    }
+    Ok(())
 }
