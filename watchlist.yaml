@@ -1,0 +1,16 @@
+chains:
+  rh:
+    wss_rpc_url: "wss://robinhood-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
+    https_rpc_url: "https://robinhood-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
+    launch:
+      deployer: "0xe33E9E479dF8802cb0866d5d05258bEc4cF62948"
+      method_id: "0xf85f8e41"
+    graduation:
+      deployer: "0xC7819B64A1dAECD7eC19856d026cb14EfBd89046"
+      method_id: "0x2f53ef2f"
+  base:
+    wss_rpc_url: "wss://base-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
+    https_rpc_url: "https://base-mainnet.g.alchemy.com/v2/alch_QpPETbK2kiwDIaNk6aF40"
+    graduation:
+      deployer: "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"
+      method_id: "0xa1671295"
