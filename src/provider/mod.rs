@@ -1,31 +1,29 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::sync::Arc;
+
+use alloy::providers::{DynProvider, Provider as AlloyProvider, ProviderBuilder};
 
 use crate::config::watchlist::Watchlist;
 
+type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
 /// Accès RPC à une chain. Partagé (`Arc`) entre Listener, Executor, etc.
+///
+/// `http` sert aux appels JSON-RPC (eth_call, eth_sendRawTransaction, ...),
+/// `ws` aux souscriptions (`ws.subscribe_logs(&filter)`).
 #[derive(Debug)]
 pub struct Provider {
     pub chain: String,
-    pub http_url: String,
-    pub ws_url: String,
-    // plus tard: client HTTP réutilisable, pool WS + reconnexion, nonce manager...
+    pub http: DynProvider,
+    pub ws: DynProvider,
 }
 
 impl Provider {
-    pub fn new(chain: String, http_url: String, ws_url: String) -> Self {
-        Provider { chain, http_url, ws_url }
-    }
-
-    /// STUB — ouvrir la connexion WS, poser un filtre `eth_subscribe("logs", ...)`
-    /// et renvoyer le stream de logs.
-    pub async fn subscribe_logs(&self /* , filter */) {
-        todo!("WS subscribe sur {}", self.ws_url)
-    }
-
-    /// STUB — appel JSON-RPC HTTP (eth_call, eth_sendRawTransaction, ...).
-    pub async fn call(&self /* , req */) {
-        todo!("HTTP RPC sur {}", self.http_url)
+    pub async fn new(chain: String, http_url: String, ws_url: String) -> Result<Self> {
+        let http = ProviderBuilder::new().connect(&http_url).await?.erased();
+        let ws = ProviderBuilder::new().connect(&ws_url).await?.erased();
+        Ok(Self { chain, http, ws })
     }
 }
 
@@ -36,21 +34,21 @@ pub struct Providers {
 }
 
 impl Providers {
-    pub fn from_watchlist(watchlist: &Watchlist) -> Self {
-        let chains = watchlist
-            .chains
-            .iter()
-            .map(|(name, chain)| {
-                let provider = Provider::new(
-                    name.clone(),
-                    chain.https_rpc_url.clone(),
-                    chain.wss_rpc_url.clone(),
-                );
-                (name.clone(), Arc::new(provider))
-            })
-            .collect();
+    pub async fn from_watchlist(watchlist: &Watchlist) -> Result<Self> {
+        let mut chains = HashMap::new();
 
-        Providers { chains }
+        for (name, chain) in &watchlist.chains {
+            let provider = Provider::new(
+                name.clone(),
+                chain.https_rpc_url.clone(),
+                chain.wss_rpc_url.clone(),
+            )
+            .await?;
+
+            chains.insert(name.clone(), Arc::new(provider));
+        }
+
+        Ok(Self { chains })
     }
 
     /// Le provider d'une chain donnée (clone du `Arc`, pas de la connexion).

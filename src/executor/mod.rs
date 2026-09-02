@@ -1,5 +1,7 @@
+#![allow(dead_code)] // stub — câblé dans main plus tard
+
 pub struct Executor {
-    pub methodId: String
+    pub method_id: String,
 }
 
 impl Executor {

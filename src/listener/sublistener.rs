@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::broadcast::Sender;
+use alloy::providers::Provider as AlloyProvider;
 
 use crate::config::watchlist::Chain;
 use crate::event::{Event, ListenerEvent};
@@ -45,16 +46,86 @@ impl SubListener {
     /// `self.chain.launch`, construire un `Detection` puis
     /// `self.tx.send(Event::Listener(ListenerEvent::Launch(detection)))`.
     async fn watch_launch(&self) {
-        let _ = self.tx.send(Event::Listener(ListenerEvent::ListeningLaunches { chain: self.name.clone() }));
-        // self.provider.subscribe_logs().await;
-        std::future::pending::<()>().await;
+        use alloy::{
+            primitives::Address,
+            providers::Provider as AlloyProvider,
+            rpc::types::Filter,
+        };
+        use futures_util::StreamExt;
+
+        let _ = self.tx.send(Event::Listener(
+            ListenerEvent::ListeningLaunches {
+                chain: self.name.clone(),
+            },
+        ));
+
+        let Some(target) = &self.chain.launch else {
+            return;
+        };
+
+        let address: Address = target
+            .deployer
+            .parse()
+            .expect("adresse launch invalide");
+
+        let filter = Filter::new()
+            .address(address);
+
+        let subscription = self.provider
+            .ws
+            .subscribe_logs(&filter)
+            .await
+            .expect("impossible de subscribe aux launches");
+
+        let mut stream = subscription.into_stream();
+
+        while let Some(log) = stream.next().await {
+            println!("[{}] Launch détecté: {:?}", self.name, log);
+        }
     }
 
     /// STUB — idem via `self.chain.graduation` →
     /// `Event::Listener(ListenerEvent::Graduation(detection))`.
     async fn watch_graduation(&self) {
-        let _ = self.tx.send(Event::Listener(ListenerEvent::ListeningGraduations { chain: self.name.clone() }));
-        // self.provider.subscribe_logs().await;
-        std::future::pending::<()>().await;
+        use alloy::{
+            primitives::Address,
+            rpc::types::Filter,
+        };
+        use futures_util::StreamExt;
+
+        let _ = self.tx.send(Event::Listener(
+            ListenerEvent::ListeningGraduations {
+                chain: self.name.clone(),
+            },
+        ));
+
+        let Some(target) = &self.chain.graduation else {
+            return;
+        };
+
+        let address: Address = target
+            .deployer
+            .parse()
+            .expect("adresse graduation invalide");
+
+        let filter = Filter::new()
+            .address(address)
+            .event("PoolGraduated(address,uint256,uint256,uint256)");
+
+        let subscription = self.provider
+            .ws
+            .subscribe_logs(&filter)
+            .await
+            .expect("impossible de subscribe aux graduations");
+
+        let mut stream = subscription.into_stream();
+
+        while let Some(log) = stream.next().await {
+            println!(
+                "[{}] Graduation détectée: {:?}",
+                self.name,
+                log
+            );
+        }
     }
 }

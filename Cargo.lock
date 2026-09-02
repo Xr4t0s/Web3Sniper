@@ -2698,6 +2698,7 @@ name = "listener"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "futures-util",
  "serde",
  "serde_yaml",
  "tokio",
